@@ -28,6 +28,7 @@ type Coords = Vec<usize>;
 struct ItemPlanner<'a> {
     items: Vec<Item<'a>>,
     coords: Coords,
+    matches: Vec<Option<usize>>,
 }
 
 #[derive(Eq)]
@@ -73,36 +74,47 @@ impl ItemPlanner<'_> {
     fn new(input: Vec<Vec<Item>>) -> ItemPlanner {
         let mut coords = Vec::new();
         let mut items = Vec::new();
+        let mut matches = Vec::new();
+        let mut element_seen = HashMap::new();
+        let mut index: usize = 0;
+
         for (floor, floor_items) in input.iter().enumerate() {
             for item in floor_items.iter() {
+                match item {
+                    Item::Elevator => {
+                        matches.push(None);
+                    }
+                    Item::Generator(e) | Item::MicroChip(e) => {
+                        if element_seen.contains_key(e) {
+                            let element_match: usize = *element_seen.get(e).unwrap();
+                            matches[element_match] = Some(index);
+                            matches.push(Some(element_match));
+                        } else {
+                            element_seen.insert(e, index);
+                            matches.push(None);
+                        }
+                    }
+                }
                 coords.push(floor);
                 items.push(item.clone());
+                index += 1;
             }
         }
-        ItemPlanner { coords, items }
+        ItemPlanner {
+            coords,
+            items,
+            matches,
+        }
     }
 
     #[allow(clippy::ptr_arg)]
-    fn count_generators_on_floor(&self, coords: &Coords, floor: usize) -> usize {
-        let mut sum = 0;
+    fn floor_has_generator(&self, coords: &Coords, floor: usize) -> bool {
         for (item_index, current_floor) in coords.iter().enumerate() {
             if *current_floor == floor {
                 if let Item::Generator(_) = self.items[item_index] {
                     if coords[item_index] == floor {
-                        sum += 1;
+                        return true;
                     }
-                }
-            }
-        }
-        sum
-    }
-
-    #[allow(clippy::ptr_arg)]
-    fn floor_contains_generator(&self, coords: &Coords, floor: usize, element: &str) -> bool {
-        for (item_index, current_item) in self.items.iter().enumerate() {
-            if let Item::Generator(current_element) = current_item {
-                if &element == current_element && coords[item_index] == floor {
-                    return true;
                 }
             }
         }
@@ -112,11 +124,11 @@ impl ItemPlanner<'_> {
     #[allow(clippy::ptr_arg)]
     fn coords_valid(&self, coords: &Coords) -> bool {
         for (item_index, current_item) in self.items.iter().enumerate() {
-            if let Item::MicroChip(element) = current_item {
+            if let Item::MicroChip(_element) = current_item {
                 let current_floor = coords[item_index];
-                if !self.floor_contains_generator(&coords, current_floor, element) {
-                    let num_generators = self.count_generators_on_floor(&coords, current_floor);
-                    if num_generators > 0 {
+                let other_item_index = self.matches[item_index].unwrap();
+                if coords[other_item_index] != current_floor {
+                    if self.floor_has_generator(&coords, current_floor) {
                         return false;
                     }
                 }
@@ -178,6 +190,41 @@ impl ItemPlanner<'_> {
         progressions
     }
 
+    fn signature(&self, coords: &Coords) -> (Vec<usize>, Vec<usize>, usize) {
+        let mut elevator = 0;
+        let mut singles_vec = vec![0, 0, 0, 0];
+        let mut pairs_vec = vec![0, 0, 0, 0];
+
+        for (index, &floor) in coords.iter().enumerate() {
+            if let Item::Elevator = self.items[index] {
+                elevator = floor;
+            } else {
+                let other = self.matches[index].unwrap();
+                if coords[other] == floor {
+                    if other < index {
+                        pairs_vec[floor] += 1;
+                    }
+                } else {
+                    singles_vec[floor] += 1;
+                }
+            }
+        }
+
+        (singles_vec, pairs_vec, elevator)
+    }
+
+    fn deduplicate(&self, candidates: Vec<Coords>) -> Vec<Coords> {
+        let mut signatures_found = HashSet::new();
+        let mut result = Vec::new();
+        for c in candidates.iter() {
+            let signature = self.signature(&c);
+            if signatures_found.insert(signature) {
+                result.push(c.clone());
+            }
+        }
+        result
+    }
+
     fn solve(&self) -> usize {
         let mut visited: HashSet<Coords> = HashSet::new();
         let mut via: HashMap<Coords, Coords> = HashMap::new();
@@ -206,6 +253,7 @@ impl ItemPlanner<'_> {
             }
 
             let candidates = self.get_valid_progressions_from(&current_node.coords);
+            let candidates = self.deduplicate(candidates);
             for candidate in candidates.iter() {
                 if !visited.contains(candidate) {
                     queue.push(NodeDescriptor {
